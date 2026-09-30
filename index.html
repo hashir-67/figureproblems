@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Figure Question Extractor</title>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&family=Inter:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{--bg1:#1a0630;--bg2:#000;--card:#0d0616;--line:#3b1a63;--acc:#9b5cf6;--txt:#ece6f7;--mut:#9a8bb5}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;font:15px/1.5 Inter,system-ui,sans-serif;color:var(--txt);background:linear-gradient(160deg,var(--bg1),#0a0314 45%,var(--bg2)) fixed}
+main{max-width:920px;margin:0 auto;padding:48px 20px 80px}
+h1{font:600 clamp(30px,6vw,52px)/1.05 Fraunces,serif;margin:0 0 10px;letter-spacing:-.02em}
+p.sub{color:var(--mut);margin:0 0 32px;max-width:56ch}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px;margin-bottom:18px}
+#drop{border:1.5px dashed var(--acc);border-radius:12px;padding:38px 16px;text-align:center;cursor:pointer;transition:.2s;background:#12061f}
+#drop.on,#drop:hover{background:#1e0a35;box-shadow:0 0 40px #6d28d955}
+#drop b{font:600 20px Fraunces,serif}
+button{font:500 15px Inter;color:#fff;background:linear-gradient(135deg,#7c3aed,#4c1d95);border:1px solid #8b5cf6;border-radius:10px;padding:11px 20px;cursor:pointer}
+button:disabled{opacity:.4;cursor:not-allowed}button:focus-visible,#drop:focus-visible{outline:2px solid #c4a1ff;outline-offset:2px}
+ul{list-style:none;padding:0;margin:14px 0 0;color:var(--mut)}
+.bar{height:8px;background:#000;border-radius:9px;overflow:hidden;margin:14px 0 8px;border:1px solid var(--line)}
+#fill{height:100%;width:0;background:linear-gradient(90deg,#5b21b6,#a78bfa);transition:width .2s}
+.row{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-top:14px}
+#grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px;margin-top:14px}
+.q{background:#000;border:1px solid var(--line);border-radius:10px;padding:8px;font-size:12px;color:var(--mut)}
+.q img{width:100%;display:block;background:#fff;border-radius:4px;margin-bottom:6px}
+.q label{display:flex;gap:6px;align-items:center;cursor:pointer}
+.hide{display:none}input[type=range]{accent-color:#8b5cf6}
+</style></head><body><main>
+<h1>Figure Question Extractor</h1>
+<p class="sub">Upload scanned NEET/JEE question PDFs. Questions containing diagrams are cut out and placed one per page, top-left, on blank paper for you to solve. Everything runs in your browser, so nothing is uploaded anywhere.</p>
+<div class="card">
+<div id="drop" tabindex="0" role="button"><b>Drop PDFs here or tap to choose</b><br><span style="color:var(--mut)">Up to 5 files, about 24 pages each</span></div>
+<input id="file" type="file" accept="application/pdf" multiple class="hide">
+<ul id="list"></ul>
+<div class="row"><button id="go" disabled>Find figure questions</button><span id="status" style="color:var(--mut)"></span></div>
+<div class="bar"><div id="fill"></div></div>
+</div>
+<div class="card hide" id="res">
+<b id="count" style="font:600 20px Fraunces,serif"></b>
+<p class="sub" style="margin:6px 0 0">Untick anything that isn't a figure question, then download.</p>
+<div id="grid"></div>
+<div class="row"><label>Question size on page <input id="size" type="range" min="35" max="75" value="50"> <span id="sv">50%</span></label>
+<button id="dl">Download PDF</button></div>
+</div>
+</main>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script>
+pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+const $=id=>document.getElementById(id);let files=[],found=[];
+const pick=fl=>{files=[...fl].filter(f=>/pdf$/i.test(f.type)||/\.pdf$/i.test(f.name)).slice(0,5);
+ $('list').innerHTML=files.map(f=>`<li>${f.name} (${(f.size/1048576).toFixed(1)} MB)</li>`).join('');$('go').disabled=!files.length};
+$('drop').onclick=()=>$('file').click();
+$('drop').onkeydown=e=>{if(e.key==='Enter')$('file').click()};
+$('file').onchange=e=>pick(e.target.files);
+$('drop').ondragover=e=>{e.preventDefault();$('drop').classList.add('on')};
+$('drop').ondragleave=()=>$('drop').classList.remove('on');
+$('drop').ondrop=e=>{e.preventDefault();$('drop').classList.remove('on');pick(e.dataTransfer.files)};
+
+// Split a rendered page into questions and return crops of those with figures
+function analyse(cv){
+ const W=cv.width,H=cv.height,d=cv.getContext('2d').getImageData(0,0,W,H).data,g=new Uint8Array(W*H),h=new Uint32Array(256);
+ for(let i=0;i<W*H;i++){const v=(d[i*4]*.3+d[i*4+1]*.59+d[i*4+2]*.11)|0;g[i]=v;h[v]++}
+ let c=0,white=255;for(let v=0;v<256;v++){c+=h[v];if(c>W*H*.85){white=v;break}}
+ const T=white*.68,ink=(x,y)=>g[y*W+x]<T;
+ const xa=(W*.03)|0,xb=(W*.97)|0,ya=(H*.07)|0,yb=(H*.94)|0;
+ const cx=new Uint32Array(W);for(let y=ya;y<yb;y+=2)for(let x=xa;x<xb;x++)if(ink(x,y))cx[x]+=2;
+ const ww=(W*.02)|0;let best=1e9,bx=-1;
+ for(let x=(W*.38)|0;x<W*.62;x+=3){let s=0;for(let k=0;k<ww;k++)s+=cx[x+k];if(s<best){best=s;bx=x+ww/2}}
+ const cols=best<.006*(yb-ya)*ww?[[xa,bx|0],[bx|0,xb]]:[[xa,xb]];
+ const gap=Math.max(4,(H*.0045)|0),out=[],all=[];
+ const cinfo=cols.map(([x0,x1])=>{const lm=new Int32Array(H).fill(-1),bands=[];
+  for(let y=ya;y<yb;y++){let n=0,f=-1;for(let x=x0;x<x1;x++)if(ink(x,y)){n++;if(f<0)f=x}if(n>2)lm[y]=f}
+  let s=-1,last=-1;
+  for(let y=ya;y<=yb;y++){if(y<yb&&lm[y]>=0){if(s<0)s=y;last=y}else if(s>=0&&(y-last>gap||y>=yb)){
+   let l=1e9;for(let k=s;k<=last;k++)if(lm[k]>=0&&lm[k]<l)l=lm[k];bands.push({y0:s,y1:last,h:last-s+1,l});s=-1}}
+  bands.forEach(b=>all.push(b.h));return{x0,x1,bands}});
+ all.sort((a,b)=>a-b);const mh=all[all.length>>1]||20;
+ for(const{x0,x1,bands}of cinfo){
+  const txt=bands.filter(b=>b.h>=mh*.5&&b.h<=mh*2.4);if(!txt.length)continue;
+  const ml=Math.min(...txt.map(b=>b.l)),tol=(x1-x0)*.045;
+  const st=txt.filter(b=>b.l<=ml+tol);
+  st.forEach((s,i)=>{const yEnd=i+1<st.length?st[i+1].y0-3:bands[bands.length-1].y1+4;
+   const inb=bands.filter(b=>b.y0>=s.y0&&b.y1<=yEnd+4);
+   if(inb.length&&inb.some(b=>b.h>mh*2.7)&&yEnd-s.y0>mh*3)out.push([x0-6,Math.max(0,s.y0-6),x1-x0+12,yEnd-s.y0+8])})}
+ return out}
+
+$('go').onclick=async()=>{
+ found=[];$('go').disabled=true;$('res').classList.add('hide');
+ try{let total=0;const docs=[];
+  for(const f of files){const p=await pdfjsLib.getDocument({data:await f.arrayBuffer()}).promise;docs.push([f,p]);total+=p.numPages}
+  let n=0;
+  for(const[f,p]of docs)for(let i=1;i<=p.numPages;i++){
+   $('status').textContent=`${f.name}, page ${i}/${p.numPages}`;
+   const pg=await p.getPage(i),vp=pg.getViewport({scale:2}),cv=document.createElement('canvas');
+   cv.width=vp.width|0;cv.height=vp.height|0;
+   await pg.render({canvasContext:cv.getContext('2d'),viewport:vp}).promise;
+   for(const[x,y,w,h]of analyse(cv)){const c=document.createElement('canvas');
+    x=Math.max(0,x);c.width=Math.min(w,cv.width-x);c.height=Math.min(h,cv.height-y);
+    c.getContext('2d').drawImage(cv,x,y,c.width,c.height,0,0,c.width,c.height);
+    found.push({url:c.toDataURL('image/jpeg',.88),w:c.width,h:c.height,tag:`${f.name.slice(0,18)} p${i}`,on:true})}
+   cv.width=cv.height=0;$('fill').style.width=(++n/total*100)+'%';
+   await new Promise(r=>setTimeout(r))}
+  $('status').textContent='Done';show()}
+ catch(e){$('status').textContent='Error: '+e.message}
+ $('go').disabled=false};
+function show(){$('count').textContent=found.length+' figure questions found';
+ $('grid').innerHTML=found.map((q,i)=>`<div class="q"><img src="${q.url}" alt=""><label><input type="checkbox" data-i="${i}" checked>${q.tag}</label></div>`).join('');
+ $('grid').onchange=e=>found[e.target.dataset.i].on=e.target.checked;$('res').classList.remove('hide')}
+$('size').oninput=e=>$('sv').textContent=e.target.value+'%';
+$('dl').onclick=()=>{const sel=found.filter(q=>q.on);if(!sel.length)return;
+ const doc=new jspdf.jsPDF({unit:'mm',format:'a4'}),PW=210,M=8;
+ sel.forEach((q,i)=>{if(i)doc.addPage();let w=PW*$('size').value/100,h=w*q.h/q.w;
+  if(h>140){h=140;w=h*q.w/q.h}doc.addImage(q.url,'JPEG',M,M,w,h)});
+ doc.setProperties({title:'Physics Figure Questions'});doc.save('Physics_Figure_Questions.pdf')};
+</script></body></html>
